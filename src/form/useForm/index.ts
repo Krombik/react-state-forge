@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import type { Control, SelectValue } from '#types';
-import type { FormOptions, FormState } from '#form/types';
+import type { FormState, ValidateOn } from '#form/types';
 import type { FormInternals } from '#form/internal/types';
 import makeForm from '#form/internal/makeForm';
 import { getEntry, holdEntry, releaseEntry } from '#form/internal/entry';
@@ -18,10 +18,10 @@ import type { AsyncControlInternals, ChangeListener } from '#internal/types';
  * paths no field is mounted on included. `$isValid` comes from the validators
  * that registered, so a rule over some other control still blocks the submit.
  *
- * The form itself lasts as long as the component: the {@link options} are read
- * again on every render, so handlers can close over fresh values, but the
- * {@link control} is read once - a form is over the one control for its life,
- * and a component that has to switch has to remount.
+ * The form itself lasts as long as the component, and so does the
+ * {@link control}: it is read once - a form is over the one control for its
+ * life, and a component that has to switch has to remount. A submit handler is
+ * given to `handleSubmit` at render, so that one closes over fresh values.
  *
  * `$isDirty` compares against the baseline: what the {@link control} held when
  * the form mounted, then whatever a `reset` left. Only what sits under the
@@ -37,18 +37,20 @@ import type { AsyncControlInternals, ChangeListener } from '#internal/types';
  * `reset(control, values)` is how they say so. Disable the fields on
  * `selectLoading` if the control can reload while the form is open.
  *
+ * @param validateOn When the validators under it run on their own, unless one
+ *   of them says otherwise (default: `'submit'`).
+ *
  * @example
  * ```tsx
  * const $values = useControl({ email: '' });
  *
- * const form = useForm($values, {
- *   validateOn: 'blur',
- *   submit: (values) => api.save(values),
- * });
+ * const form = useForm($values, 'blur');
+ *
+ * const save = form.handleSubmit((values) => api.save(values));
  *
  * return (
  *   <FormProvider form={form}>
- *     <form onSubmit={form.submit}>
+ *     <form onSubmit={save}>
  *       <Validator
  *         control={$values.email}
  *         validate={(email) => (email.includes('@') ? undefined : 'invalid email')}
@@ -62,14 +64,14 @@ import type { AsyncControlInternals, ChangeListener } from '#internal/types';
  */
 const useForm = <C extends Control>(
   control: C,
-  options: FormOptions<SelectValue<C>>
-): FormState => {
+  validateOn: ValidateOn = 'submit'
+): FormState<SelectValue<C>> => {
   const form = (useRef<FormInternals>(null).current ||= makeForm(
     control,
-    options
+    validateOn
   ));
 
-  form._options = options;
+  form._validateOn = validateOn;
 
   // the control outlives the form, so what the form holds on it goes when the
   // form does - the load watch it baselines against, and the entry of its own

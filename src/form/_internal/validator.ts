@@ -301,8 +301,13 @@ const trigger = (validator: ValidatorInternals) => {
   }
 };
 
-export const validateAll = async (form: FormInternals) => {
-  const promises: Promise<void>[] = [];
+/**
+ * Runs every validator, answering whether all of them passed - as a boolean
+ * while none of them had anything to wait for, so a sweep of sync rules costs
+ * no tick and nothing of it flips.
+ */
+export const validateAll = (form: FormInternals) => {
+  let promises: Promise<void>[] | undefined;
 
   const validators = form._validators;
 
@@ -310,13 +315,13 @@ export const validateAll = async (form: FormInternals) => {
     const promise = runValidator(validators[i]);
 
     if (promise) {
-      promises.push(promise);
+      (promises ||= []).push(promise);
     }
   }
 
-  await Promise.all(promises);
-
-  return !form._errorCount;
+  return promises
+    ? Promise.all(promises).then(() => !form._errorCount)
+    : !form._errorCount;
 };
 
 /**

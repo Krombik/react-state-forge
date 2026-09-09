@@ -2,8 +2,9 @@ import type { Control } from '#types';
 import type {
   FieldElement,
   FieldState,
-  FormOptions,
   FormState,
+  SubmitHandler,
+  SubmitLike,
   ValidateOn,
 } from '#form/types';
 
@@ -106,7 +107,15 @@ export type FieldEntry = {
 };
 
 /** @internal */
-export type FormInternals = FormState & {
+export type FormInternals = Omit<FormState, 'handleSubmit'> & {
+  /**
+   * Generic where the handle's is over the form's own value: the internals are
+   * what every form is, whatever it holds.
+   */
+  handleSubmit<T>(
+    submit: SubmitHandler<T>,
+    submitFailed?: () => void | Promise<void>
+  ): (event?: SubmitLike) => void | Promise<void>;
   /** What the form submits and what `reset` restores by default. */
   readonly _control: Control;
   readonly _entries: Map<Control, FieldEntry>;
@@ -121,7 +130,8 @@ export type FormInternals = FormState & {
   _baseline: any;
   /** Whether it has one - a load it is still waiting for does not, yet. */
   _baselined: boolean;
-  _options: FormOptions;
+  /** Default trigger of the validators under it, read once by each of them. */
+  _validateOn: ValidateOn;
   /** Validators currently holding an error. */
   _errorCount: number;
   /** Validators currently in flight. */

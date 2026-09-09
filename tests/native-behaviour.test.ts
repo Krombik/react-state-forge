@@ -158,9 +158,7 @@ test('a failed submit focuses the first field registered, not the first drawn', 
 
   const focused: string[] = [];
 
-  const form: any = renderHook(() =>
-    (useForm as any)($values, { submit: () => {} })
-  ).result;
+  const form: any = renderHook(() => (useForm as any)($values)).result;
 
   const under = <T>(render: () => T) =>
     renderHook(render, (run) => {
@@ -195,7 +193,7 @@ test('a failed submit focuses the first field registered, not the first drawn', 
     })
   );
 
-  await form.submit();
+  await form.handleSubmit(() => {})();
 
   assert.deepEqual(
     focused,

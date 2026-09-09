@@ -35,7 +35,7 @@ const usePathValidator = ((
           _controls: [control],
           _paths: true,
           _validate: validate,
-          _mode: validateOn || (form && form._options.validateOn) || 'submit',
+          _mode: validateOn || form._validateOn,
           _reported: new Map(),
           _errorControls: new Map(),
           _attempt: 0,

@@ -114,29 +114,19 @@ export type ErrorOf<E extends ControlError> = UnionToIntersection<
     : never
 >;
 
-export type FormOptions<T = any> = {
-  /**
-   * Runs once every validator passed, with the form control's value. A submit
-   * leaves the baseline where it is - call `reset(control, values)` from here
-   * to make what was sent the new one.
-   *
-   * {@link changed} lists the fields that moved since the baseline, as
-   * dot-joined paths relative to the form control - what a `PATCH` would send.
-   * Leave the parameter out and nothing is collected for it.
-   */
-  submit(values: T, changed: Array<KeysOf<T>>): void | Promise<void>;
-  /**
-   * Runs instead of {@link FormOptions.submit submit} when a validator failed,
-   * after the first invalid field is focused - to scroll somewhere, or report
-   * the failure. What failed is in the error controls the validators returned.
-   */
-  submitFailed?(): void | Promise<void>;
-  /** Default {@link ValidateOn trigger} of the validators under the form (default: `'submit'`). */
-  validateOn?: ValidateOn;
-};
+/**
+ * What a submit gets: the form control's value, and {@link changed} - the
+ * fields that moved since the baseline, as dot-joined paths relative to the
+ * form control, what a `PATCH` would send. Leave the parameter out and nothing
+ * is collected for it.
+ */
+export type SubmitHandler<T = any> = (
+  values: T,
+  changed: Array<KeysOf<T>>
+) => void | Promise<void>;
 
 /** The form handle — what `useForm` creates and `useFormState` reads back. */
-export type FormState = {
+export type FormState<T = any> = {
   /** `true` while a submit is in flight, across the validator sweep and the submit handler. */
   readonly $isSubmitting: ReadonlyControl<boolean>;
   /** `true` while any validator has an async check in flight. */
@@ -146,15 +136,27 @@ export type FormState = {
   /** `true` while anything has been edited since it was last reset. */
   readonly $isDirty: ReadonlyControl<boolean>;
   /**
-   * Runs every validator and, if all passed, the
-   * {@link FormOptions.submit submit} handler. Ignores the call while another
-   * submit is in flight, and calls `preventDefault` on a submit
-   * {@link event} — so it's usable directly as a `<form onSubmit>`, and as a
-   * button's `onClick` without swallowing what the button would have done.
+   * Makes a submit handler: it runs every validator and then {@link submit},
+   * or {@link submitFailed} if any of them failed. Take as many as the form
+   * has buttons - a save, a publish, a save-as-draft.
+   *
+   * The handler ignores the call while any submit of the form is in flight,
+   * and calls `preventDefault` on a submit event - so it's usable directly as
+   * a `<form onSubmit>`, and as a button's `onClick` without swallowing what
+   * the button would have done. It returns a promise only if something of the
+   * submit had to be waited for: sync rules and a sync {@link submit} are over
+   * by the time it returns, and `$isSubmitting` never flips for those.
    */
-  submit(event?: SubmitLike): Promise<void>;
-  /** Runs every validator, resolving to whether all of them passed. */
-  validate(): Promise<boolean>;
+  handleSubmit(
+    submit: SubmitHandler<T>,
+    submitFailed?: () => void | Promise<void>
+  ): (event?: SubmitLike) => void | Promise<void>;
+  /**
+   * Runs every validator, answering whether all of them passed - a boolean
+   * outright while every rule of the form was synchronous, a promise of one
+   * otherwise. `await` reads both.
+   */
+  validate(): boolean | Promise<boolean>;
   /**
    * Puts the values back to the baseline - everything, or one control, a path
    * with no field on it included. Given a value as well, writes that and makes

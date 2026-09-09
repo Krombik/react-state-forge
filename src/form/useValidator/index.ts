@@ -50,7 +50,7 @@ const useValidator = ((
         _controls: controls,
         _tuple: tuple,
         _validate: validate,
-        _mode: validateOn || (form && form._options.validateOn) || 'submit',
+        _mode: validateOn || form._validateOn,
         _errorControl: createControl(undefined),
         _attempt: 0,
         _pending: 0,

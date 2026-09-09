@@ -131,7 +131,7 @@ For working code rather than snippets, [`examples/`](examples) has fifteen stand
 - **Persistence**: [`getPersistStorage`](#getpersiststorageoptions), [`safeLocalStorage`](#safelocalstorage), [`safeSessionStorage`](#safesessionstorage)
 - **Platform**: [`$appVisible`](#appvisible), [`mediaQuery`](#mediaqueryquery), [`$online`](#online), [`$windowSize`](#windowsize)
 - **Schedulers**: [`batch`](#batchcallback-scheduler), [`createManualScheduler`](#createmanualscheduler), [`createThrottleScheduler`](#createthrottleschedulerms), [`createDebounceScheduler`](#createdebounceschedulerms)
-- **Forms**: [`useForm`](#useformcontrol-options), [`FormProvider`](#formprovider-form), [`useValidator`](#usevalidatorcontrol-validate-validateon--validator), [`usePathValidator`](#usepathvalidatorcontrol-validate-validateon--pathvalidator), [`useNativeField`](#usenativefieldcontrol-options--nativefield), [`useField`](#usefieldcontrol-onchange-replace--field), [`useFieldArray`](#usefieldarraycontrol), [`useFieldState`](#usefieldstatecontrol), [`useFormState`](#useformstate)
+- **Forms**: [`useForm`](#useformcontrol-validateon), [`FormProvider`](#formprovider-form), [`useValidator`](#usevalidatorcontrol-validate-validateon--validator), [`usePathValidator`](#usepathvalidatorcontrol-validate-validateon--pathvalidator), [`useNativeField`](#usenativefieldcontrol-options--nativefield), [`useField`](#usefieldcontrol-onchange-replace--field), [`useFieldArray`](#usefieldarraycontrol), [`useFieldState`](#usefieldstatecontrol), [`useFormState`](#useformstate)
 - **Router**: [`createRouter`](#createrouterpaths), [`withPrefixes`](#withprefixesprefixes-paths), [`go`](#godelta), [`createPath`](#createpathpath), [`createAsyncPath`](#createasyncpathsource), [`param`](#paramoptions), [`query`](#queryoptions), [`oneOf`](#oneofoptions), [`arrayParam`](#arrayparamoptions), [`createRouterView`](#createrouterviewroutes), [`Link` / `useLink`](#link--uselink), [`navigate`](#navigateto-replace-ignoreblock-scrolltotop-scrollrestoration), [params as controls](#route-params-are-controls), [`replaceValue`](#replacevaluecontrol-value-scheduler), [anchors](#anchors), [`registerAnchorOffset`](#registeranchoroffsetroute), [`selectRegisteredAnchors`](#selectregisteredanchorsroute), [`trackScroll`](#trackscrollanchor), [`$navigationState`](#navigationstate), [`navigationBlocker`](#blocking-navigation), [`repairHistory`](#repairhistory)
 - **[Troubleshooting](#troubleshooting)**: [param value type + `stringify`](#paramquery-value-type-breaks-when-stringify-is-present), [named import suggestions in VS Code](#get-named-controlla-import-suggestions-in-vs-code)
 
@@ -518,7 +518,7 @@ const unwatch = watchValue($theme, (theme, prevTheme) => {
 });
 
 // what someone edited, not the settings landing from the server
-watchValue($settings, () => form.submit());
+watchValue($settings, () => save());
 ```
 
 ### `watchValues(controls, callback, immediate?, withEmpty?)`
@@ -1102,30 +1102,45 @@ Three separate things, each mountable on its own:
 
 A field validates nothing and a validator renders nothing, so a rule can cover controls no field is mounted on, several rules can cover one field, and both un-register by disappearing.
 
-### `useForm(control, options)`
+### `useForm(control, validateOn?)`
 
-Creates the form handle. Created once and kept for the component's life; `options` are re-read every render.
+Creates the form handle. Created once and kept for the component's life.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `control` | `Control` | What gets submitted, reset and baselined. |
-| `options.submit` | `(values, changed) => void \| Promise<void>` | Runs once every registered validator passed. `changed` is the dot paths differing from the baseline - what a `PATCH` would send. |
-| `options.submitFailed?` | `() => void \| Promise<void>` | Runs instead, after the first invalid field is focused. What failed is in the error controls the validators returned. |
-| `options.validateOn?` | `'submit' \| 'change' \| 'blur'` | Default trigger for the validators under it (default: `'submit'`). |
+| `validateOn?` | `'submit' \| 'change' \| 'blur'` | Default trigger for the validators under it (default: `'submit'`). |
 
-**Returns**: a `FormState` - `$isSubmitting`, `$isValidating`, `$isValid`, `$isDirty`, `submit(event?)`, `validate()`, `reset(control?, value?)`, `focus(control)`.
+**Returns**: a `FormState` - `$isSubmitting`, `$isValidating`, `$isValid`, `$isDirty`, `handleSubmit(submit, submitFailed?)`, `validate()`, `reset(control?, value?)`, `focus(control)`.
 
-`$isValid` is every mounted validator holding no error - one that never ran counts as valid. `focus(control)` focuses that field's element and returns whether there was one; a field is focusable once it's mounted and passed its `ref` on. A failed `submit` focuses the first invalid field in the _document_, and for an error that marks no field of its own (an array rule, a group rule) the first field under what it validates. A `ref` only has to carry a `focus`, so a component handle works in place of an element - one has no document position to read, so it's ordered by when it registered instead.
+`handleSubmit` makes a submit handler: it sweeps every validator and then runs `submit`, or `submitFailed` if any of them failed. Take as many as the form has buttons - a save, a publish, a save-as-draft - and all of them share the form's one in-flight guard, so a second one called while another is running does nothing.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `submit` | `(values, changed) => void \| Promise<void>` | Runs once every registered validator passed. `changed` is the dot paths differing from the baseline - what a `PATCH` would send, collected only for a handler that declares the parameter. |
+| `submitFailed?` | `() => void \| Promise<void>` | Runs instead, after the first invalid field is focused. What failed is in the error controls the validators returned. |
+
+The handler takes an optional event and calls `preventDefault` on a submit one, so it goes straight onto `<form onSubmit>` and onto a button's `onClick` without swallowing what the button would have done.
+
+It returns a promise **only if something of the submit had to be waited for**. A form of synchronous rules and a synchronous `submit` is over by the time the handler returns, so `$isSubmitting` never flips for one - there is no stretch of it for anything to render, and a re-render either side of nothing is a re-render nobody asked for. Same for `validate()`, which answers with a boolean outright in that case; `await` reads both.
+
+```tsx
+const publish = form.handleSubmit((values) => api.publish(values));
+
+<button type='button' onClick={publish}>Publish</button>;
+```
+
+`$isValid` is every mounted validator holding no error - one that never ran counts as valid. `focus(control)` focuses that field's element and returns whether there was one; a field is focusable once it's mounted and passed its `ref` on. A failed submit focuses the first invalid field in the _document_, and for an error that marks no field of its own (an array rule, a group rule) the first field under what it validates. A `ref` only has to carry a `focus`, so a component handle works in place of an element - one has no document position to read, so it's ordered by when it registered instead.
 
 The **baseline** is the form control's value, taken when the form mounts, and it moves to whatever a `reset` wrote. `$isDirty` and `changed` are both measured against it. It is the only baseline there is: a field over some other control is validated, swept and submitted like any other, but has nothing to compare against, so its `$isDirty` stays `false`, it counts towards nothing, and a bare `reset()` clears its rules without touching its value. A submit leaves it alone - `reset(control, values)` from the handler is what makes what was sent the new baseline, so an autosaving form gets what moved since the _previous_ submit:
 
 ```ts
-const form = useForm($values, {
-  submit: async (values, changed) => {
-    await api.save(values, changed);
+const form = useForm($values);
 
-    form.reset($values, values);   // an edit made while it was in flight stays dirty
-  },
+const save = form.handleSubmit(async (values, changed) => {
+  await api.save(values, changed);
+
+  form.reset($values, values);   // an edit made while it was in flight stays dirty
 });
 ```
 
@@ -1388,7 +1403,7 @@ const { $isError, $isDirty } = useFieldState($values.email);
 
 ### `useFormState()`
 
-The enclosing form - the same handle `useForm` created, so `$isSubmitting`, `$isValid`, `$isDirty` and `submit` are reachable without threading props down. Throws outside a `FormProvider`.
+The enclosing form - the same handle `useForm` created, so `$isSubmitting`, `$isValid`, `$isDirty` and `handleSubmit` are reachable without threading props down. Throws outside a `FormProvider`.
 
 ```tsx
 const { $isSubmitting, $isValid } = useFormState();

@@ -35,7 +35,7 @@ const watchValue: {
    * @example
    * ```ts
    * // what someone edited, not the settings landing from the server
-   * const unwatch = watchValue($settings, () => form.submit());
+   * const unwatch = watchValue($settings, () => save());
    * ```
    */
   <T, I extends boolean = false>(

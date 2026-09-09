@@ -16,6 +16,6 @@ import { getFieldState } from '#form/internal/entry';
  * ```
  */
 const useFieldState = <C extends Control>(control: C): FieldState<C> =>
-  getFieldState(useEntry(useFormState() as FormInternals, control));
+  getFieldState(useEntry(useFormState<any>() as FormInternals, control));
 
 export default useFieldState;

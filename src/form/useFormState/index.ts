@@ -5,8 +5,9 @@ import FormContext from '#form/internal/FormContext';
 import throwNoProvider from '#form/internal/throwNoProvider';
 
 /**
- * The enclosing form, so `$isSubmitting`, `$isValid`, `$isDirty` and `submit`
- * are there without passing them down. Throws outside a `FormProvider`.
+ * The enclosing form, so `$isSubmitting`, `$isValid`, `$isDirty` and
+ * `handleSubmit` are there without passing them down. Throws outside a
+ * `FormProvider`.
  *
  * @example
  * ```tsx
@@ -15,7 +16,7 @@ import throwNoProvider from '#form/internal/throwNoProvider';
  * return <button disabled={useValue($isSubmitting) || !useValue($isValid)}>Save</button>;
  * ```
  */
-const useFormState = (): FormState =>
+const useFormState = <T = any>(): FormState<T> =>
   useContext(FormContext) || throwNoProvider();
 
 export default useFormState;

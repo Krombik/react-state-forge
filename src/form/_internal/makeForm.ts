@@ -1,6 +1,6 @@
 import type { Control } from '#types';
 import type { FieldEntry, FormInternals } from '#form/internal/types';
-import type { FieldElement, FormOptions } from '#form/types';
+import type { FieldElement, SubmitHandler, ValidateOn } from '#form/types';
 import { EMPTY_ARR, INTERNALS } from '#internal/constants';
 import createPrimitiveControl from '#core/createPrimitiveControl';
 import getValue from '#core/getValue';
@@ -41,14 +41,134 @@ const setIn = (
   return copy;
 };
 
-const setSubmitting = (form: FormInternals, isSubmitting: boolean) => {
-  form._isSubmitting = isSubmitting;
+/** What has to be waited on, as opposed to what already answered. */
+const isThenable = (result: any): result is Promise<any> =>
+  !!result && typeof result.then == 'function';
 
-  if (form._submittingControl) {
-    setValue(form._submittingControl, isSubmitting);
+/**
+ * Whichever half of a submit the sweep left: the handler over the values, or
+ * the focus of what stopped it. Out here so a form's handlers share the one.
+ */
+const proceed = (
+  form: FormInternals,
+  submit: SubmitHandler,
+  submitFailed: (() => void | Promise<void>) | undefined,
+  valid: boolean
+) => {
+  if (valid) {
+    const values = getValue(form._control);
+
+    // describes what is being sent, not what was typed while it was
+    // in flight - and not walked for a handler that never asked
+    let changed: readonly string[] = EMPTY_ARR;
+
+    if (submit.length > 1) {
+      const path = form._control[INTERNALS]._path;
+
+      const start = path ? path.length : 0;
+
+      const paths: string[] = [];
+
+      const it = form._entries.values();
+
+      for (let i = form._entries.size; i--;) {
+        const entry = it.next().value!;
+
+        const entryPath = entry._control[INTERNALS]._path;
+
+        // a path no longer than the form control's own is the form
+        // control, which knows the subtree moved but not where
+        if (
+          entry._tracked &&
+          entryPath &&
+          entryPath.length > start &&
+          isNotEqual(getValue(entry._control), snapshotOf(entry))
+        ) {
+          paths.push(entryPath.slice(start).join('.'));
+        }
+      }
+
+      changed = paths;
+    }
+
+    return submit(values, changed as any);
   }
-};
 
+  // the first invalid field in the document, not in registration
+  // order. An error of a whole subtree - a duplicate an array
+  // reported, a group rule - marks no field of its own, so the first
+  // field under what it validates stands in
+  let focused: FieldElement | undefined;
+
+  const consider = (entry: FieldEntry) => {
+    // a ref only has to carry a `focus`, so this can be a handle a
+    // component hands out in place of whatever it renders
+    const element = entry._element as HTMLElement | undefined;
+
+    if (!element) {
+      return;
+    }
+
+    // DOCUMENT_POSITION_PRECEDING. Nothing orders a native tree by
+    // where it is drawn, and a handle is nowhere in a document, so
+    // both of those keep the order they registered in
+    if (
+      focused === undefined ||
+      (!__NATIVE__ &&
+        element.compareDocumentPosition &&
+        (focused as HTMLElement).compareDocumentPosition &&
+        (focused as HTMLElement).compareDocumentPosition(element) & 2)
+    ) {
+      focused = element;
+    }
+  };
+
+  const considerUnder = (target: Control) => {
+    const it = form._entries.values();
+
+    for (let i = form._entries.size; i--;) {
+      const entry = it.next().value!;
+
+      if (isUnder(target, entry._control)) {
+        consider(entry);
+      }
+    }
+  };
+
+  const validators = form._validators;
+
+  for (let i = 0; i < validators.length; i++) {
+    const validator = validators[i];
+
+    if (validator._invalid) {
+      const marked = validator._marked;
+
+      if (marked.length) {
+        for (let j = marked.length; j--;) {
+          const entry = marked[j];
+
+          if (entry._element) {
+            consider(entry);
+          } else {
+            considerUnder(entry._control);
+          }
+        }
+      } else {
+        const controls = validator._controls;
+
+        for (let j = 0; j < controls.length; j++) {
+          considerUnder(controls[j]);
+        }
+      }
+    }
+  }
+
+  if (focused) {
+    focused.focus();
+  }
+
+  return submitFailed && submitFailed();
+};
 /** Restores the {@link target} to whatever it currently restores to. */
 const restore = (form: FormInternals, target: Control) => {
   // data that has never arrived is nothing to restore to, and writing
@@ -62,7 +182,7 @@ const restore = (form: FormInternals, target: Control) => {
   clearUnder(form, target);
 };
 
-const makeForm = (control: Control, options: FormOptions): FormInternals => {
+const makeForm = (control: Control, validateOn: ValidateOn): FormInternals => {
   const entries = new Map<Control, FieldEntry>();
 
   const form: FormInternals = {
@@ -72,7 +192,7 @@ const makeForm = (control: Control, options: FormOptions): FormInternals => {
     _blurValidators: [],
     _baseline: undefined,
     _baselined: false,
-    _options: options,
+    _validateOn: validateOn,
     _errorCount: 0,
     _pendingCount: 0,
     _dirtyCount: 0,
@@ -100,137 +220,52 @@ const makeForm = (control: Control, options: FormOptions): FormInternals => {
     validate() {
       return validateAll(form);
     },
-    async submit(event) {
-      // a click handler's default is the button's own behaviour
-      if (event && event.type === 'submit') {
-        event.preventDefault();
-      }
+    handleSubmit(submit, submitFailed) {
+      return (event) => {
+        // a click handler's default is the button's own behavior
+        if (event && event.type === 'submit') {
+          event.preventDefault();
+        }
 
-      if (!form._isSubmitting) {
-        setSubmitting(form, true);
+        if (form._isSubmitting) {
+          return;
+        }
+
+        form._isSubmitting = true;
+
+        let result: any;
 
         try {
-          const { submit, submitFailed } = form._options;
+          result = validateAll(form);
 
-          if (await validateAll(form)) {
-            const values = getValue(control);
+          // only what `then` has to be given one is a closure
+          result = isThenable(result)
+            ? result.then((passed: boolean) =>
+                proceed(form, submit, submitFailed, passed)
+              )
+            : proceed(form, submit, submitFailed, result);
+        } catch (error) {
+          form._isSubmitting = false;
 
-            // describes what is being sent, not what was typed while it was
-            // in flight - and not walked for a handler that never asked
-            let changed: readonly string[] = EMPTY_ARR;
-
-            if (submit.length > 1) {
-              const path = control[INTERNALS]._path;
-
-              const start = path ? path.length : 0;
-
-              const paths: string[] = [];
-
-              const it = entries.values();
-
-              for (let i = entries.size; i--;) {
-                const entry = it.next().value!;
-
-                const entryPath = entry._control[INTERNALS]._path;
-
-                // a path no longer than the form control's own is the form
-                // control, which knows the subtree moved but not where
-                if (
-                  entry._tracked &&
-                  entryPath &&
-                  entryPath.length > start &&
-                  isNotEqual(getValue(entry._control), snapshotOf(entry))
-                ) {
-                  paths.push(entryPath.slice(start).join('.'));
-                }
-              }
-
-              changed = paths;
-            }
-
-            await submit(values, changed as any);
-          } else {
-            // the first invalid field in the document, not in registration
-            // order. An error of a whole subtree - a duplicate an array
-            // reported, a group rule - marks no field of its own, so the first
-            // field under what it validates stands in
-            let focused: FieldElement | undefined;
-
-            const consider = (entry: FieldEntry) => {
-              // a ref only has to carry a `focus`, so this can be a handle a
-              // component hands out in place of whatever it renders
-              const element = entry._element as HTMLElement | undefined;
-
-              if (!element) {
-                return;
-              }
-
-              // DOCUMENT_POSITION_PRECEDING. Nothing orders a native tree by
-              // where it is drawn, and a handle is nowhere in a document, so
-              // both of those keep the order they registered in
-              if (
-                focused === undefined ||
-                (!__NATIVE__ &&
-                  element.compareDocumentPosition &&
-                  (focused as HTMLElement).compareDocumentPosition &&
-                  (focused as HTMLElement).compareDocumentPosition(element) & 2)
-              ) {
-                focused = element;
-              }
-            };
-
-            const considerUnder = (target: Control) => {
-              const it = entries.values();
-
-              for (let i = entries.size; i--;) {
-                const entry = it.next().value!;
-
-                if (isUnder(target, entry._control)) {
-                  consider(entry);
-                }
-              }
-            };
-
-            const validators = form._validators;
-
-            for (let i = 0; i < validators.length; i++) {
-              const validator = validators[i];
-
-              if (validator._invalid) {
-                const marked = validator._marked;
-
-                if (marked.length) {
-                  for (let j = marked.length; j--;) {
-                    const entry = marked[j];
-
-                    if (entry._element) {
-                      consider(entry);
-                    } else {
-                      considerUnder(entry._control);
-                    }
-                  }
-                } else {
-                  const controls = validator._controls;
-
-                  for (let j = 0; j < controls.length; j++) {
-                    considerUnder(controls[j]);
-                  }
-                }
-              }
-            }
-
-            if (focused) {
-              focused.focus();
-            }
-
-            if (submitFailed) {
-              await submitFailed();
-            }
-          }
-        } finally {
-          setSubmitting(form, false);
+          throw error;
         }
-      }
+
+        if (isThenable(result)) {
+          if (form._submittingControl) {
+            setValue(form._submittingControl, true);
+          }
+
+          return result.finally(() => {
+            form._isSubmitting = false;
+
+            if (form._submittingControl) {
+              setValue(form._submittingControl, false);
+            }
+          });
+        }
+
+        form._isSubmitting = false;
+      };
     },
     reset(target?: Control, value?: any) {
       // `undefined` is a value to reset to, so only the count tells restoring

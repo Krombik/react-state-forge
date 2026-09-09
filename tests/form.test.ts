@@ -37,8 +37,8 @@ import type {
   ControlError,
   ControlErrors,
   FieldState,
-  FormOptions,
   FormState,
+  SubmitHandler,
 } from '../build/form/types.js';
 import type { Control, ReadonlyControl } from '../build/core/types.js';
 
@@ -82,9 +82,22 @@ const mount = <T>(form: FormState | undefined, render: () => T) =>
     }
   });
 
-const createForm = (control: any, options: Partial<FormOptions> = {}) =>
-  renderHook(() => useForm(control, { submit: noop, ...options } as any))
-    .result;
+const createForm = (
+  control: any,
+  options: {
+    submit?: (values: any, changed?: any) => any;
+    submitFailed?: () => any;
+    validateOn?: any;
+  } = {}
+) => {
+  const form = renderHook(() => useForm(control, options.validateOn)).result;
+
+  // the handler the cases below submit through, so one that has nothing to say
+  // about the submit itself doesn't have to make its own
+  return Object.assign(form, {
+    submit: form.handleSubmit(options.submit || noop, options.submitFailed),
+  });
+};
 
 /** A mounted `Field` - registration is the mount, and it ends at the unmount. */
 const field = (
@@ -1187,7 +1200,7 @@ test('a form over an async derived control baselines its first value too', async
 test('a value that landed with nobody listening is still the baseline', async () => {
   const $values = createAsyncControl<{ name: string }>();
 
-  const rendered = renderHook(() => useForm($values, { submit: noop } as any));
+  const rendered = renderHook(() => useForm($values));
 
   const form = rendered.result;
 
@@ -1325,7 +1338,7 @@ test('aria lands on the element without a rerender, and shares describedby', asy
   assert.equal(attribute('aria-describedby'), 'hint');
 });
 
-test('isSubmitting flips even when nothing about the submit is async', async () => {
+test('isSubmitting only flips over a submit something had to be waited for', async () => {
   const $values = createControl({ name: 'jane' });
 
   const form = createForm($values, {
@@ -1340,11 +1353,47 @@ test('isSubmitting flips even when nothing about the submit is async', async () 
     seen.push(value);
   });
 
-  await form.submit();
+  // sync rules, sync handler: over before the call returns, so there is no
+  // stretch of it for anything to render
+  assert.equal(form.submit(), undefined, 'nothing to wait for');
 
   await tick();
 
-  assert.deepEqual(seen, [true, false]);
+  assert.deepEqual(seen, []);
+
+  const asyncForm = createForm($values, {
+    submit: () => tick(),
+  });
+
+  field(asyncForm, $values.name);
+
+  const seenAsync: boolean[] = [];
+
+  watchValue(asyncForm.$isSubmitting, (value) => {
+    seenAsync.push(value);
+  });
+
+  await asyncForm.submit();
+
+  await tick();
+
+  assert.deepEqual(seenAsync, [true, false]);
+});
+
+test('a sweep of sync validators answers without a tick', async () => {
+  const $values = createControl({ name: '' });
+
+  const form = createForm($values);
+
+  validator(form, $values.name, (name) => (name ? undefined : 'required'));
+
+  assert.equal(form.validate(), false);
+
+  setValue($values.name, 'jane');
+
+  await tick();
+
+  assert.equal(form.validate(), true);
 });
 
 // type-only: a control that can't hold what the field may write is rejected
@@ -1356,11 +1405,11 @@ declare const $files: Control<FileList>;
 declare const $date: Control<Date>;
 
 type Changed = Parameters<
-  FormOptions<{
+  SubmitHandler<{
     name?: string;
     when: Date;
     rows: Array<{ tags: string[] }>;
-  }>['submit']
+  }>
 >[1];
 
 declare const patch: (changed: Changed) => void;
@@ -2280,7 +2329,7 @@ test('two runs of one rule are two answers, and one of them is not both', async 
 test('an unmounted form lets go of the control it was over', async () => {
   const $values = createControl({ name: 'jane' });
 
-  const rendered = renderHook(() => useForm($values, { submit: noop } as any));
+  const rendered = renderHook(() => useForm($values));
 
   const form = rendered.result;
 
@@ -2404,14 +2453,15 @@ test('a submit handler that throws is the handler`s to answer for', async () => 
 
   field(form, $values.email);
 
-  await assert.rejects(form.submit(), /the server said no/);
+  // it threw where it was called, the way the sync handler it is did
+  assert.throws(() => form.submit(), /the server said no/);
 
   // whatever it threw, the form is not left submitting
   assert.equal(getValue(form.$isSubmitting), false);
   assert.equal(getValue(form.$isValid), true);
 
   // and it submits again when asked again
-  await assert.rejects(form.submit(), /the server said no/);
+  assert.throws(() => form.submit(), /the server said no/);
 });
 
 test('a value the mount catches up with is the baseline, not an edit', () => {
@@ -2548,7 +2598,7 @@ test('a field outside the form control has no dirtiness of its own', async () =>
 test('a form hidden and shown again keeps the baseline it took', async () => {
   const $values = createControl({ name: 'jane' });
 
-  const rendered = renderHook(() => useForm($values, { submit: noop } as any));
+  const rendered = renderHook(() => useForm($values));
 
   const form = rendered.result;
 
